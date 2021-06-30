@@ -4,9 +4,7 @@ import sys
 sys.path.append(os.path.abspath('..'))
 
 import pickle
-import random
 import socket
-import string
 from threading import Lock, Thread
 
 lock_friends = Lock()
@@ -21,109 +19,19 @@ ENCODING = 'utf-8'
 global sendfiledata
 sendfiledata = {}
 
-global rooms
-rooms = {}
-
-class Room:
-    def __init__(self, room_code, max_participants, partyleader_sock, partyleader_username):
-        self.room_code = room_code
-        self.participants = [(partyleader_sock, partyleader_username)]
-        self.max_participants = max_participants
-        self.party_leader = partyleader_username
-        
-    def num_players(self):
-        return len(self.participants)
-    
-    def add_player(self, sock, username):
-        if self.num_players() < self.max_participants:
-            for player in self.participants:
-                send(player[0], '_playerjoinedroom', (username, self.room_code, self.num_players() + 1, self.max_participants))
-            self.participants.append((sock, username))
-            return True
-        else:
-            return False
-    
-    def remove_player(self, username):
-        sock = None
-        for socket, name in self.participants:
-            if name == username:
-                sock = socket
-        self.participants.remove((sock, username))
-        send(sock, '_kickedfromroom', (self.room_code,))
-
-    def leave_player(self, username):
-        sock = None
-        for socket, name in self.participants:
-            if name == username:
-                sock = socket
-        self.participants.remove((sock, username))
-
-    def close(self):
-        for player_sock, player_username in self.participants:
-            send(player_sock, '_roomclosed', ())
-
-def room_participants(sock, username, clients, friends, args):
-    room_code = get_room(username)
-    participant = []
-    for player_sock, player_username in rooms[room_code].participants:
-        participant.append(player_username)
-    send(sock, '_roomparticipants', (participant,))
-
-def create_room(sock, username, clients, friends, args):
-    max_participants, = args
-    code = ''.join(random.choice(string.ascii_uppercase) for i in range(3))
-    while code in rooms:
-        code = ''.join(random.choice(string.ascii_uppercase) for i in range(3))
-    rooms[code] = Room(code, int(max_participants), sock, username)
-    send(sock, '_roomcreated', (code, int(max_participants)))
-
-
-def join_room(sock, username, clients, friends, args):
-    room_code, = args
-
-    if room_code not in rooms:
-        send(sock, '_invalidroomcode', (room_code,))
-
-    rooms[room_code].add_player(sock, username)
-    participantcount = rooms[room_code].num_players()
-    maxparticipants = rooms[room_code].max_participants
-    send(sock, '_joinedroom', (room_code, participantcount, maxparticipants))
-
-def kick_from_room(sock, username, clients, friends, args):
-    kicked_username, =  args
-    code = get_room(username)
-    code2 = get_room(kicked_username)
-    if code != code2:
-        send(sock, '_cannotkick_notinroom', ())
-    elif username == rooms[code].party_leader:
-        rooms[code].remove_player(kicked_username)
-        send(sock, '_kicksuccess', (kicked_username, rooms[code].num_players(), rooms[code].max_participants))
-    else:
-        send(sock, '_cannotkick_notleader', ())
-
-def leave_room(sock, username, clients, friends, args):
-    code = get_room(username)
-    if username == rooms[code].party_leader:
-        rooms[code].close()
-        rooms.pop(code)
-    else:
-        rooms[code].leave_player(username)
-        send(sock, '_leavesuccess', ())
-
 def remove_friend(sock, username, clients, friends, args):
     dest_username, = args
 
     if not check_friends(friends, username, dest_username):
         return error_notfriends(sock, dest_username)
-
+    
     with lock_friends:
         friends.remove((username, dest_username))
         friends.remove((dest_username, username))
-
+    
     send(sock, '_removefriend', (dest_username,))
     dest_sock = clients[dest_username][0]
     send(dest_sock, '_removedbyfriend', (username,))
-
 
 def friend_list(sock, username, clients, friends, args):
     incoming = set()
@@ -134,42 +42,39 @@ def friend_list(sock, username, clients, friends, args):
                 outgoing.add(b)
             elif b == username:
                 incoming.add(a)
-
+    
     friended = incoming.intersection(outgoing)
     incoming = incoming.difference(friended)
     outgoing = outgoing.difference(friended)
 
     send(sock, '_friendlisting', (friended, incoming, outgoing))
 
-
 def sendfile_ok(sock, username, clients, friends, args):
     if username in sendfiledata:
         sock.sendall(sendfiledata[username])
-
 
 def friend_accept(sock, username, clients, friends, args):
     dest_username, = args
 
     if check_friends(friends, username, dest_username):
         return error_alreadyfriends(sock, dest_username)
-
+        
     with lock_friends:
         if (dest_username, username) not in friends:
             return error_requestdoesnotexist(sock, dest_username)
-
+    
         friends.add((username, dest_username))
 
     send(sock, '_requestsentaccept', (dest_username,))
     dest_sock = clients[dest_username][0]
     send(dest_sock, '_requestaccepted', (username,))
 
-
 def friend_request(sock, username, clients, friends, args):
     dest_username, = args
 
     if check_friends(friends, username, dest_username):
         return error_alreadyfriends(sock, dest_username)
-
+        
     with lock_friends:
         if (username, dest_username) in friends:
             return error_requestexists(sock, dest_username)
@@ -213,80 +118,61 @@ def sendfile(sock, username, clients, friends, args):
             return
         filedata += data
         cursor += len(data)
-
+    
     global sendfiledata
     sendfiledata[dest_username] = filedata
-
+    
     dest_sock = clients[dest_username][0]
     send(dest_sock, '_acceptfile', (username, filename, filesize))
-
 
 def check_friends(friends, a, b):
     with lock_friends:
         return (a, b) in friends and (b, a) in friends
-
-def get_room(username):
-    for code in rooms:
-        for player_sock, player_username in rooms[code].participants:
-            if username == player_username:
-                return code
 
 ##### ERRORS ###########################################################
 
 def error_alreadyfriends(sock, dest_username):
     send(sock, '_alreadyfriends', (dest_username,))
 
-
 def error_requestexists(sock, dest_username):
     send(sock, '_requestexists', (dest_username,))
-
 
 def error_requestdoesnotexist(sock, dest_username):
     send(sock, '_requestdoesnotexist', (dest_username,))
 
-
 def error_notfriends(sock, dest_username):
     send(sock, '_notfriends', (dest_username,))
-
 
 ########################################################################
 
 def send(sock, command, args):
     sock.send(pickle.dumps(Payload(command, args)))
 
-
 ########################################################################
 
 COMMANDS = {
-    '_req': friend_request,  # dest_username
-    '_acc': friend_accept,  # dest_username
-    '_pm': private_message,  # dest_username, message
-    '_bcast': broadcast,  # message
-    '_sendfile': sendfile,  # dest_username, filename, filesize
+    '_req': friend_request, # dest_username
+    '_acc': friend_accept, # dest_username
+    '_pm': private_message, # dest_username, message
+    '_bcast': broadcast, # message
+    '_sendfile': sendfile, # dest_username, filename, filesize
     '_sendfile_ok': sendfile_ok,
     '_friendlist': friend_list,
-    '_removefriend': remove_friend,  # dest_username
-    '_makeroom': create_room,  # max_participants
-    '_joinroom': join_room,  # room_code
-    '_kick': kick_from_room, # kicked username
-    '_leave': leave_room,
-    '_participants': room_participants,
+    '_removefriend': remove_friend, #dest_username
 }
-
 
 def serve_client(sock, username, clients, friends):
     while True:
         data = sock.recv(BUFFER_SIZE)
         if len(data) == 0:
             break
-
+        
         payload = pickle.loads(data)
         print(f'{payload.command} {payload.args}')
         try:
             COMMANDS[payload.command](sock, username, clients, friends, payload.args)
         except KeyError:
             pass
-
 
 def main():
     sock_server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -306,7 +192,6 @@ def main():
         clients[username] = (sock_client, addr_client, thread)
 
         thread.start()
-
 
 if __name__ == '__main__':
     main()
