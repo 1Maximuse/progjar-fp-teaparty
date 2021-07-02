@@ -1,6 +1,5 @@
 import os
 import pickle
-from server.server import room_participants
 import socket
 import sys
 from threading import Thread
@@ -15,8 +14,41 @@ ENCODING = 'utf-8'
 global sendfiledata
 sendfiledata = None
 
+# 0: outside lobby
+# 1: inside lobby
+# 2: game started
 global state
 state = 0
+
+input_message = ([
+    '\rAvailable commands:',
+    '_roomlist                           List of rooms',
+    '_makeroom <number of participants>  Make a room',
+    '_joinroom <code>                    Join room with specific code',
+    '_bcast <message>                    Broadcast a message',
+    '_pm <recipient> <message>           Send a message to recipient',
+    '_req <username>                     Send a friend request to username',
+    '_acc <username>                     Accept a friend request from username',
+    '_friendlist                         See your friend list',
+    '_removefriend <username>            Remove a friend from friend list',
+    '_sendfile <username> <path>         Send a file at path to username',
+    '_quit                               Exit the app',
+    '----------',
+    '>> '
+], [
+    '\rAvailable commands:',
+    '_kick <username>                    Kick player from room',
+    '_leave                              Leave room',
+    '_participants                       View room participants',
+    '_startgame                          Start the game',
+    '----------',
+    '>> '
+], [
+    '\rAvailable commands:',
+    '_g <word>                           Guess the word',
+    '----------',
+    '>> '
+])
 
 def incoming_friend_request(sock, message):
     sender, = message
@@ -119,15 +151,17 @@ def send_file(sock, message):
 
 def room_created(sock, message):
     code, maxparticipants = message
-    print_message(f'Successfully created and joined room with code {code} 1/{maxparticipants}')
     global state
     state = 1
+    state_changed()
+    print_message(f'Successfully created and joined room with code {code} 1/{maxparticipants}')
 
 def room_joined(sock, message):
     code, participantcount, maxparticipant = message
-    print_message(f'Successfully joined room with code {code} {participantcount}/{maxparticipant}')
     global state
     state = 1
+    state_changed()
+    print_message(f'Successfully joined room with code {code} {participantcount}/{maxparticipant}')
 
 def room_invalid_code(sock, message):
     code, = message
@@ -149,19 +183,28 @@ def room_kick_success(sock, message):
 
 def room_kicked(sock, message):
     code, = message
-    print_message(f"You are kicked from room {code}.")
     global state
     state = 0
+    state_changed()
+    print_message(f"You are kicked from room {code}.")
 
 def room_leave(sock, message):
-    print_message('Successfully left room.')
     global state
     state = 0
+    state_changed()
+    print_message('Successfully left room.')
 
 def room_close(sock, message):
-    print_message('Room has been closed')
     global state
     state = 0
+    state_changed()
+    print_message('Room has been closed')
+
+def game_start(sock, message):
+    global state
+    state = 2
+    state_changed()
+    print_message('Game is started')
 
 def room_participant(sock, message):
     participants, = message
@@ -171,6 +214,61 @@ def room_participant(sock, message):
         msg += f'{i}. {participant}\n'
         i = i+1
     print_message(msg)
+
+def new_round(sock, message):
+    prompt, current_round, max_round = message
+    print_message(f'Round {current_round}/{max_round}\nType the longest word containing: {prompt}')
+
+def player_guessed(sock, message):
+    guesser, word, = message
+    print_message(f'{guesser}: {word}')
+
+def winning_answer(sock, message):
+    guesser, word, = message
+    length = len(word)
+    print_message(f'{guesser} is leading with {word} (word length: {length})')
+
+def game_over(sock, message):
+    winner, score, = message
+    global state
+    state = 1
+    state_changed()
+    msg = f'{winner[0]}'
+    if len(winner) > 1:
+        for w in winner[1:]:
+            print(f', {w}')
+    print_message(f'{msg} won the game with score of {score} >.<')
+
+def round_winner(sock, message):
+    winner, word, point, = message
+    if winner is not None:
+        print_message(f'{winner} won the round with the word: {word}. Total points: {point}')
+    else:
+        print_message(f'No one guessed right >:(')
+
+def cannot_start(sock, message):
+    print_message(f"You are not authorized to start game")
+
+def room_list(sock, message):
+    rooms, = message
+    msg = 'Code\tLeader\tCapacity\tStatus\n'
+    for room in rooms:
+        if room[4]:
+            msg += f'{room[0]}\t{room[1]}\t{room[2]}/{room[3]}\tStarted\n'
+        else:
+            msg += f'{room[0]}\t{room[1]}\t{room[2]}/{room[3]}\tWaiting\n'
+    print_message(msg)
+
+def room_already_running(sock, message):
+    code, = message
+    print_message(f'Cannot join room {code}, game is already started')
+
+def room_full(sock, message):
+    code, = message
+    print_message(f'Cannot join room {code}, room is full')
+
+def wrong_room_size(sock, message):
+    print_message('Room size should be 2-5')
 
 def print_message(message):
     message = message.strip("\n")
@@ -203,7 +301,17 @@ COMMANDS = {
     '_leavesuccess': room_leave,
     '_roomclosed': room_close,
     '_roomparticipants': room_participant, # list of players
-
+    '_playerguessed': player_guessed, # username, word
+    '_winninganswer': winning_answer, # username, word
+    '_newround': new_round, # prompt, current round, max round
+    '_gamestart': game_start,
+    '_gameover': game_over, # usernames, score
+    '_roundwinner': round_winner, # username word point
+    '_cannotstart_notleader': cannot_start,
+    '_roomlistdata': room_list, # code, party leader, participants, max participants, status
+    '_roomalreadyrunning': room_already_running, # room code
+    '_roomfull': room_full, #room code
+    '_wrongroomsize': wrong_room_size,
 }
 
 def receive_message(sock_client):
@@ -213,6 +321,9 @@ def receive_message(sock_client):
             break
         payload = pickle.loads(data)
         COMMANDS[payload.command](sock_client, payload.args)
+
+def state_changed():
+    print('\n'.join(input_message[state]), end='')
 
 def main():
     username = input('Set username: ').strip().lstrip('_')
@@ -226,26 +337,13 @@ def main():
     thread_receive = Thread(target=receive_message, args=(sock_client,))
     thread_receive.start()
 
+    state_changed()
     while True:
-        dest = input( \
-            '''----------
-Available commands:
-_makeroom <number of participants>\tMake a room
-_joinroom <code>\tJoin room with specific code
-_kick <username>\tKick player from room
-_bcast <message>\tBroadcast a message
-_pm <recipient> <message>\tSend a message to recipient
-_req <username>\tSend a friend request to username
-_acc <username>\tAccept a friend request from username
-_friendlist\tSee your friend list
-_removefriend <username>\tRemove a friend from friend list
-_sendfile <username> <path>\tSend a file at path to username
-_quit\tExit the app
-----------
->> ''')
+        dest = input()
         available_commands = (
-            ('_bcast', '_pm', '_req', '_acc', '_sendfile', '_quit', '_friendlist', '_removefriend', '_makeroom', '_joinroom'), # not connected to room
-            ('_kick', '_leave', '_participants'), # connected to room
+            ('_bcast', '_pm', '_req', '_acc', '_sendfile', '_quit', '_friendlist', '_removefriend', '_makeroom', '_joinroom', '_roomlist'), # not connected to room
+            ('_kick', '_leave', '_participants', '_startgame'), # connected to room
+            ('_g'), # game playing
         )
         command = dest.split(" ", 1)
         if command[0] not in available_commands[state]:
@@ -270,7 +368,7 @@ _quit\tExit the app
             args = command[1].split(' ')
             data = pickle.dumps(Payload(command[0], (args[0], args[1])))
             sock_client.send(data)
-        elif command[0] in ['_friendlist', '_participants', '_leave']:
+        elif command[0] in ['_friendlist', '_participants', '_leave', '_startgame', '_roomlist']:
             data = pickle.dumps(Payload(command[0], ()))
             sock_client.send(data)
         else:
