@@ -153,14 +153,14 @@ def room_created(sock, message):
     code, maxparticipants = message
     global state
     state = 1
-    state_changed()
+    print_command()
     print_message(f'Successfully created and joined room with code {code} 1/{maxparticipants}')
 
 def room_joined(sock, message):
     code, participantcount, maxparticipant = message
     global state
     state = 1
-    state_changed()
+    print_command()
     print_message(f'Successfully joined room with code {code} {participantcount}/{maxparticipant}')
 
 def room_invalid_code(sock, message):
@@ -185,25 +185,25 @@ def room_kicked(sock, message):
     code, = message
     global state
     state = 0
-    state_changed()
+    print_command()
     print_message(f"You are kicked from room {code}.")
 
 def room_leave(sock, message):
     global state
     state = 0
-    state_changed()
+    print_command()
     print_message('Successfully left room.')
 
 def room_close(sock, message):
     global state
     state = 0
-    state_changed()
+    print_command()
     print_message('Room has been closed')
 
 def game_start(sock, message):
     global state
     state = 2
-    state_changed()
+    print_command()
     print_message('Game is started')
 
 def room_participant(sock, message):
@@ -232,11 +232,11 @@ def game_over(sock, message):
     winner, score, = message
     global state
     state = 1
-    state_changed()
+    print_command()
     msg = f'{winner[0]}'
     if len(winner) > 1:
         for w in winner[1:]:
-            print(f', {w}')
+            msg += f', {w}'
     print_message(f'{msg} won the game with score of {score} >.<')
 
 def round_winner(sock, message):
@@ -254,9 +254,9 @@ def room_list(sock, message):
     msg = 'Code\tLeader\tCapacity\tStatus\n'
     for room in rooms:
         if room[4]:
-            msg += f'{room[0]}\t{room[1]}\t{room[2]}/{room[3]}\tStarted\n'
+            msg += f'{room[0]}\t\t{room[1]}\t{room[2]}/{room[3]}\tStarted\n'
         else:
-            msg += f'{room[0]}\t{room[1]}\t{room[2]}/{room[3]}\tWaiting\n'
+            msg += f'{room[0]}\t\t{room[1]}\t{room[2]}/{room[3]}\tWaiting\n'
     print_message(msg)
 
 def room_already_running(sock, message):
@@ -322,7 +322,7 @@ def receive_message(sock_client):
         payload = pickle.loads(data)
         COMMANDS[payload.command](sock_client, payload.args)
 
-def state_changed():
+def print_command():
     print('\n'.join(input_message[state]), end='')
 
 def main():
@@ -337,7 +337,7 @@ def main():
     thread_receive = Thread(target=receive_message, args=(sock_client,))
     thread_receive.start()
 
-    state_changed()
+    print_command()
     while True:
         dest = input()
         available_commands = (
@@ -374,7 +374,7 @@ def main():
         else:
             data = pickle.dumps(Payload(command[0], (command[1],)))
             sock_client.send(data)
-
+        print_command()
 
 if __name__ == '__main__':
     main()

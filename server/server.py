@@ -42,7 +42,7 @@ class Room:
         self.participants = [(partyleader_sock, partyleader_username)]
         self.max_participants = max_participants
         self.party_leader = partyleader_username
-        self.thread = Thread(target=self.game_thread)
+        self.thread = None
         self.guess_queue = Queue()
         self.running = False
         
@@ -96,8 +96,8 @@ class Room:
                 round_begin = game_millis
                 current_winner = ('', '')
 
-            time.sleep(0.001)
-            game_millis += 1
+            time.sleep(0.01)
+            game_millis += 10
         self.running = False
     
     def guess(self, username, word):
@@ -161,6 +161,9 @@ def start_game(sock, username, clients, friends, args):
 
     for player in rooms[room_code].participants:
         send(player[0], '_gamestart', ())
+    if rooms[room_code].thread is not None and rooms[room_code].thread.is_alive():
+        rooms[room_code].thread.join()
+    rooms[room_code].thread = Thread(target=rooms[room_code].game_thread)
     rooms[room_code].thread.start()
 
 def guess_word(sock, username, clients, friends, args):
